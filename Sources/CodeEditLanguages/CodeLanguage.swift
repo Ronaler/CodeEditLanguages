@@ -68,7 +68,7 @@ public struct CodeLanguage {
     }
 
     /// The bundle's resource URL
-    internal var resourceURL: URL? = Bundle.module.resourceURL
+    internal var resourceURL: URL? = CodeEditLanguagesResources.url
 
     /// A set of aditional identifiers to use for things like shebang matching.
     public let additionalIdentifiers: Set<String>
@@ -217,4 +217,52 @@ public enum DocumentationComments: Hashable {
 
     case single(String)
     case pair((String, String))
+}
+
+
+/// Where this module's SwiftPM resource bundle actually is — the NON-FATAL
+/// replacement for `Bundle.module`.
+///
+/// `Bundle.module` cannot be used here. SwiftPM generates that accessor to look
+/// in exactly two places — the ROOT of the `.app` bundle
+/// (`Foo.app/CodeEditLanguages_CodeEditLanguages.bundle`, beside `Contents`,
+/// not inside it) and the absolute build directory of the machine that compiled
+/// it — and to call `fatalError` when both miss. The first can never exist in a
+/// shipped app: `codesign` refuses to sign a bundle that has anything in its
+/// root ("unsealed contents present in the bundle root"). The second exists only
+/// on the build machine.
+///
+/// The consequence is severe and silent: `resourceURL` above is the default of a
+/// STORED property, so it is evaluated whenever any `CodeLanguage` is created —
+/// `detectLanguageFrom(url:)` included. An app built with `swift build` and
+/// packaged as a `.app` therefore traps the moment it opens a file in an editor,
+/// on every machine except the one that compiled it. It works for the developer,
+/// so it ships.
+///
+/// Resolving by hand keeps the failure proportionate: no bundle means no
+/// highlight queries (`queryURL` returns `nil`, which every caller already
+/// handles), not a dead process.
+internal enum CodeEditLanguagesResources {
+
+    /// Anchor for `Bundle(for:)`: names the bundle this code was compiled into.
+    private final class Anchor: NSObject {}
+
+    /// Computed once — the answer cannot change while the process runs.
+    static let url: URL? = {
+        let name = "CodeEditLanguages_CodeEditLanguages.bundle"
+        let own = Bundle(for: Anchor.self)
+        // Order matters: `Contents/Resources` of a packaged app first (that is
+        // where a packer puts it), then the build directory of a bare
+        // executable (`swift run`), then the directory holding this module's
+        // own bundle (`swift test`, where `Bundle.main` is the test runner).
+        let roots = [Bundle.main.resourceURL,
+                     Bundle.main.bundleURL,
+                     own.bundleURL.deletingLastPathComponent()]
+        for root in roots.compactMap({ $0 }) {
+            if let bundle = Bundle(url: root.appendingPathComponent(name)) {
+                return bundle.resourceURL
+            }
+        }
+        return nil
+    }()
 }
