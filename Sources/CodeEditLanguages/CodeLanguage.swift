@@ -259,8 +259,27 @@ internal enum CodeEditLanguagesResources {
                      Bundle.main.bundleURL,
                      own.bundleURL.deletingLastPathComponent()]
         for root in roots.compactMap({ $0 }) {
-            if let bundle = Bundle(url: root.appendingPathComponent(name)) {
-                return bundle.resourceURL
+            guard let bundle = Bundle(url: root.appendingPathComponent(name)) else { continue }
+            // `queryURL` appends "Resources/tree-sitter-<name>/highlights.scm" to
+            // whatever this returns, so the answer is the directory that path is
+            // counted from — and that is NOT the same directory in both bundle
+            // layouts. Xcode builds a resource bundle with `Contents/Resources`,
+            // and the copied `Resources` directory lands inside it, so
+            // `resourceURL` is right. SwiftPM's command-line build produces a FLAT
+            // bundle whose only child is the copied `Resources` directory itself;
+            // Foundation reports `<bundle>/Resources` as `resourceURL` there, and
+            // appending again asked for `Resources/Resources/...`, which does not
+            // exist. Highlighting was then silently off for every SwiftPM build:
+            // `queryURL` pointed at a missing file, every caller handled the nil,
+            // and the editor rendered plain text.
+            for candidate in [bundle.resourceURL, bundle.bundleURL].compactMap({ $0 }) {
+                var isDirectory: ObjCBool = false
+                let grammars = candidate.appendingPathComponent("Resources")
+                if FileManager.default.fileExists(atPath: grammars.path,
+                                                  isDirectory: &isDirectory),
+                   isDirectory.boolValue {
+                    return candidate
+                }
             }
         }
         return nil
